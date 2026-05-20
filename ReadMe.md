@@ -26,18 +26,9 @@ Then Restart the pc
 To start mail automation Run from Mailer folder: python main.py
 Enter mail ids seperated by comma (,)
 eg: 
-richard.m@ureka.co.uk,mia.anderson@ureka.co.uk,neha.agarwal@ureka.co.uk,priya.iyer@ureka.co.uk,meena.ghosh@ureka.co.uk
+mail1@outlook.com,mail2@outlook.com
 
 Change the path on the main file with your mail template and database paths
 Mode 1: 
-TEMPLATE_PATH = r"C:\Users\xenor\AppData\Roaming\Microsoft\Templates\Ureka_multi_aifsi.oft"
-DATABASE_PATH = r"C:\AutoEdge\New folder\Multi_Mailer\AIfSI KPI Dashboard.xlsx - Richard.csv"
-
-
-Mode 2: ENROLL
-TEMPLATE_PATH = r"C:\Users\xenor\AppData\Roaming\Microsoft\Templates\Ureka_enroll.oft"
-DATABASE_PATH = r"C:\AutoEdge\New folder\Multi_Mailer\Enrollment KPI Tracker.xlsx - Sheet4.csv"
-
-Mode 3: LAUNCH
-TEMPLATE_PATH = r"C:\Users\xenor\AppData\Roaming\Microsoft\Templates\Ureka_Launch.oft"
-DATABASE_PATH = r"C:\Users\xenor\Documents\Multi_Mailer\Active Enrollment - Sheet1.csv"
+TEMPLATE_PATH = r"C:...oft"
+DATABASE_PATH = r"C:...csv"
