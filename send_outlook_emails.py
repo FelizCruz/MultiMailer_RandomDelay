@@ -3,13 +3,14 @@ import csv
 import os
 import re
 import time
+import random
 import datetime
 
-DEFAULT_MAX_EMAILS = 100
-DEFAULT_BATCH_SIZE = 6
-DEFAULT_BATCH_INTERVAL = 1800
+DEFAULT_MAX_EMAILS = 96
+DEFAULT_BATCH_SIZE = 7
+DEFAULT_BATCH_INTERVAL = 1500
 DEFAULT_DELAY_IN_BATCH = 5
-DEFAULT_SEND_FROM = "richard.m@ureka.co.uk"
+DEFAULT_SEND_FROM = "id@outlook.com"
 
 PAUSE_FLAG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pause.flag")
 
@@ -88,7 +89,9 @@ def send_emails_from_template(
     max_emails=DEFAULT_MAX_EMAILS,
     batch_size=DEFAULT_BATCH_SIZE,
     batch_interval=DEFAULT_BATCH_INTERVAL,
+    batch_interval_max=None,
     delay_in_batch=DEFAULT_DELAY_IN_BATCH,
+    delay_in_batch_max=None,
     dry_run=False,
     send_from=None,
     sender_names=None,
@@ -226,9 +229,11 @@ def send_emails_from_template(
             except Exception as e:
                 print(f"❌ Error processing {recipient.get('email', 'unknown')}: {e}")
 
-            time.sleep(delay_in_batch)
+            _delay = random.uniform(delay_in_batch, delay_in_batch_max) if delay_in_batch_max and delay_in_batch_max > delay_in_batch else delay_in_batch
+            time.sleep(_delay)
 
         if remaining and total_sent < total_cap:
-            _countdown(batch_interval)
+            _interval = random.uniform(batch_interval, batch_interval_max) if batch_interval_max and batch_interval_max > batch_interval else batch_interval
+            _countdown(_interval)
 
     print(f"\nFinished — {total_sent} emails sent.")
