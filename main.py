@@ -3,15 +3,17 @@ from load_recipients import load_from_csv
 import csv
 
 # ── Fixed paths ───────────────────────────────────────────
-TEMPLATE_PATH = r"C:\Users\xenor\AppData\Roaming\Microsoft\Templates\Ureka_multi_aifsi.oft"
-DATABASE_PATH = r"C:\AutoEdge\New folder\Multi_Mailer\AIfSI KPI Dashboard.xlsx - Richard.csv"
+TEMPLATE_PATH = r"C:\template.oft"
+DATABASE_PATH = r"C:\db.csv"
 
 # ── Defaults (user can override interactively) ────────────
-DEFAULT_SEND_FROM      = ["richard.m@ureka.co.uk"]
-DEFAULT_MAX_EMAILS     = 100    # per account
+DEFAULT_SEND_FROM      = ["id@outlook.com"]
+DEFAULT_MAX_EMAILS     = 96    # per account
 DEFAULT_BATCH_SIZE     = 7
-DEFAULT_BATCH_INTERVAL = 1800   # seconds (30 min)
-DELAY_IN_BATCH         = 5      # seconds between emails inside a batch
+DEFAULT_BATCH_INTERVAL     = 1500   # seconds (25 min)
+DEFAULT_BATCH_INTERVAL_MAX = 2700   # seconds (45 min) — upper bound for randomisation
+DELAY_IN_BATCH             = 5     # seconds between emails inside a batch (min)
+DELAY_IN_BATCH_MAX         = 20     # seconds between emails inside a batch (max)
 DRY_RUN                = False  # True = open drafts for review
 DEFAULT_NAME_COLUMN    = "Contacted Person Name"
 DEFAULT_EMAIL_COLUMN   = "Institution Email"
@@ -29,6 +31,22 @@ def _ask(prompt, default, cast=str):
     except ValueError:
         print(f"  ⚠  Invalid input, using default ({default})")
         return default
+
+
+def _ask_range(label, default_min, default_max, cast=int):
+    """Prompt for a min/max range. Returns (min_val, max_val).
+    If the user enters the same value for both, delays become fixed (no randomisation)."""
+    print(f"\n  {label}")
+    while True:
+        lo = _ask(f"    Min (seconds)", default_min, cast)
+        hi = _ask(f"    Max (seconds)", default_max, cast)
+        if lo <= hi:
+            if lo == hi:
+                print(f"    → Fixed delay of {lo}s (no randomisation)")
+            else:
+                print(f"    → Will randomise between {lo}s – {hi}s")
+            return lo, hi
+        print(f"  ⚠  Min ({lo}) must be ≤ Max ({hi}). Please try again.")
 
 
 def _get_csv_headers(csv_path):
@@ -80,9 +98,17 @@ def main():
 
     # ── 2. Tunables ───────────────────────────────────────
     print()
-    max_emails     = _ask("Max emails PER ACCOUNT", DEFAULT_MAX_EMAILS, int)
-    batch_size     = _ask("Batch size", DEFAULT_BATCH_SIZE, int)
-    batch_interval = _ask("Batch interval (seconds)", DEFAULT_BATCH_INTERVAL, int)
+    max_emails = _ask("Max emails PER ACCOUNT", DEFAULT_MAX_EMAILS, int)
+    batch_size = _ask("Batch size", DEFAULT_BATCH_SIZE, int)
+
+    delay_min, delay_max = _ask_range(
+        "Delay between emails WITHIN a batch:",
+        DELAY_IN_BATCH, DELAY_IN_BATCH_MAX,
+    )
+    interval_min, interval_max = _ask_range(
+        "Delay between BATCHES:",
+        DEFAULT_BATCH_INTERVAL, DEFAULT_BATCH_INTERVAL_MAX,
+    )
 
     total_possible = max_emails * len(send_from_list)
     print(f"\n  → {max_emails} mails × {len(send_from_list)} account(s) = "
@@ -143,8 +169,10 @@ def main():
         csv_path=DATABASE_PATH,
         max_emails=max_emails,
         batch_size=batch_size,
-        batch_interval=batch_interval,
-        delay_in_batch=DELAY_IN_BATCH,
+        batch_interval=interval_min,
+        batch_interval_max=interval_max,
+        delay_in_batch=delay_min,
+        delay_in_batch_max=delay_max,
         dry_run=DRY_RUN,
         send_from=send_from_list,
         sender_names=sender_names,
