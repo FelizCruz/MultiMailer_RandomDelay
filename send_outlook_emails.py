@@ -1,29 +1,40 @@
-import win32com.client
 import csv
+import datetime
 import os
+import random
 import re
 import time
-import random
-import datetime
+
+try:
+    import win32com.client
+except ImportError:
+    win32com = None
+
 
 DEFAULT_MAX_EMAILS = 96
 DEFAULT_BATCH_SIZE = 7
 DEFAULT_BATCH_INTERVAL = 1500
 DEFAULT_DELAY_IN_BATCH = 5
-DEFAULT_SEND_FROM = "id@outlook.com"
+DEFAULT_SEND_FROM = "richard.m@ureka.co.uk"
+DEFAULT_BCC_BATCH_SIZE = 35
+SEND_MODE_INDIVIDUAL = "individual"
+SEND_MODE_BCC = "bcc"
 
 PAUSE_FLAG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pause.flag")
+
 
 def _is_paused():
     return os.path.exists(PAUSE_FLAG)
 
+
 def _wait_while_paused():
     if not _is_paused():
         return
-    print("\n⏸ PAUSED — delete 'pause.flag' to resume …")
+    print("\nPAUSED - delete 'pause.flag' to resume ...")
     while _is_paused():
         time.sleep(2)
-    print("▶ Resumed!\n")
+    print("Resumed!\n")
+
 
 def _countdown(seconds, label="Next batch"):
     end_time = time.time() + seconds
@@ -33,14 +44,22 @@ def _countdown(seconds, label="Next batch"):
         if remaining <= 0:
             break
         mins, secs = divmod(remaining, 60)
-        print(f"\r⏳ {label} in {mins:02d}:{secs:02d} …", end="", flush=True)
+        print(f"\r{label} in {mins:02d}:{secs:02d} ...", end="", flush=True)
         time.sleep(1)
     print("\r" + " " * 50 + "\r", end="", flush=True)
 
-def _update_csv_status(csv_path, email, status="Email Sent", sent_from="", email_column="Institution Email", status_column="Status"):
+
+def _update_csv_status(
+    csv_path,
+    email,
+    status="Email Sent",
+    sent_from="",
+    email_column="Institution Email",
+    status_column="Status",
+):
     today = datetime.datetime.now().strftime("%d %b %Y")
     rows = []
-    
+
     with open(csv_path, newline="", encoding="utf-8-sig") as f:
         reader = csv.DictReader(f)
         fieldnames = list(reader.fieldnames) if reader.fieldnames else []
@@ -62,14 +81,20 @@ def _update_csv_status(csv_path, email, status="Email Sent", sent_from="", email
         writer.writeheader()
         writer.writerows(rows)
 
-_TITLE_RE = re.compile(r'^(mr\.?|ms\.?|mrs\.?|dr\.?|prof\.?|miss|sir|dame|rev\.?)\s+', re.IGNORECASE)
+
+_TITLE_RE = re.compile(
+    r"^(mr\.?|ms\.?|mrs\.?|dr\.?|prof\.?|miss|sir|dame|rev\.?)\s+",
+    re.IGNORECASE,
+)
+
 
 def _first_name(full_name: str) -> str:
     if not full_name or not full_name.strip():
         return ""
-    name = _TITLE_RE.sub('', full_name.strip())
+    name = _TITLE_RE.sub("", full_name.strip())
     parts = name.split() if name else full_name.strip().split()
     return parts[0] if parts else ""
+
 
 def _get_account(outlook, email_address):
     try:
@@ -81,6 +106,101 @@ def _get_account(outlook, email_address):
     except Exception as e:
         print(f"Error reading accounts: {e}")
     return None
+
+
+def _ireplace(text, old, new):
+    return re.compile(re.escape(old), re.IGNORECASE).sub(lambda m: new, text)
+
+
+def _clear_recipient_types(mail, recipient_types):
+    for i in range(mail.Recipients.Count, 0, -1):
+        try:
+            if mail.Recipients.Item(i).Type in recipient_types:
+                mail.Recipients.Remove(i)
+        except Exception:
+            pass
+
+
+def _add_recipient(mail, email_address, recipient_type):
+    recipient = mail.Recipients.Add(email_address.strip())
+    recipient.Type = recipient_type
+    recipient.Resolve()
+    return recipient
+
+
+def _force_account(mail, account):
+    try:
+        mail._oleobj_.Invoke(*(64209, 0, 8, 0, account))
+    except Exception:
+        try:
+            mail.SendUsingAccount = account
+        except Exception:
+            pass
+
+
+def _get_body(mail):
+    try:
+        return mail.HTMLBody, True
+    except Exception:
+        return mail.Body, False
+
+
+def _set_body(mail, body, is_html):
+    if is_html:
+        mail.HTMLBody = body
+    else:
+        mail.Body = body
+
+
+def _apply_body_replacements(
+    body,
+    recipient,
+    current_addr,
+    sender_names=None,
+    filter_short_names=True,
+    send_mode=SEND_MODE_INDIVIDUAL,
+):
+    if not body:
+        return body
+
+    if send_mode == SEND_MODE_BCC:
+        body = re.sub(r"(?i)Dear\s+\[First name\],", lambda m: "Greetings,", body)
+        body = _ireplace(body, "[First name]", "")
+        body = _ireplace(body, "[Institution Name]", "")
+    else:
+        preview_first = _first_name(recipient.get("full_name", ""))
+        short_name = len(preview_first) <= 3
+
+        if filter_short_names and short_name:
+            body = re.sub(r"(?i)Dear\s+\[First name\],", lambda m: "Greetings,", body)
+        else:
+            body = _ireplace(body, "[First name]", preview_first)
+
+        inst_name = recipient.get("institution_name", "")
+        body = _ireplace(body, "[Institution Name]", inst_name)
+
+    if sender_names and current_addr in sender_names:
+        body = _ireplace(body, "[sender name]", sender_names[current_addr])
+    body = _ireplace(body, "[sender mail]", current_addr)
+
+    return body
+
+
+def _validate_send_mode(send_mode):
+    send_mode = (send_mode or SEND_MODE_INDIVIDUAL).strip().lower()
+    if send_mode not in (SEND_MODE_INDIVIDUAL, SEND_MODE_BCC):
+        raise ValueError("send_mode must be 'individual' or 'bcc'")
+    return send_mode
+
+
+def _next_account_with_capacity(send_from, sent_by, max_emails, robin_idx):
+    for _ in range(len(send_from)):
+        current_addr = send_from[robin_idx % len(send_from)]
+        robin_idx += 1
+        if sent_by[current_addr] < max_emails:
+            return current_addr, robin_idx
+    return None, robin_idx
+
 
 def send_emails_from_template(
     template_path,
@@ -97,9 +217,20 @@ def send_emails_from_template(
     sender_names=None,
     email_column="Institution Email",
     status_column="Status",
+    filter_short_names=True,
+    send_mode=SEND_MODE_INDIVIDUAL,
+    bcc_batch_size=DEFAULT_BCC_BATCH_SIZE,
 ):
     if not os.path.exists(template_path):
         raise FileNotFoundError(template_path)
+
+    send_mode = _validate_send_mode(send_mode)
+    if send_mode == SEND_MODE_BCC and bcc_batch_size < 1:
+        raise ValueError("bcc_batch_size must be at least 1")
+    if batch_size < 1:
+        raise ValueError("batch_size must be at least 1")
+    if max_emails < 1:
+        raise ValueError("max_emails must be at least 1")
 
     if send_from is None:
         send_from = [DEFAULT_SEND_FROM]
@@ -107,9 +238,14 @@ def send_emails_from_template(
         send_from = [send_from]
 
     try:
+        if win32com is None:
+            raise ImportError("pywin32 is not installed")
         outlook = win32com.client.Dispatch("Outlook.Application")
     except Exception as e:
-        raise RuntimeError(f"Could not connect to Outlook. Ensure Classic Outlook is running. Error: {e}")
+        raise RuntimeError(
+            "Could not connect to Outlook. Ensure Classic Outlook is running. "
+            f"Error: {e}"
+        )
 
     accounts = {}
     for addr in send_from:
@@ -130,81 +266,59 @@ def send_emails_from_template(
 
         try:
             outlook = win32com.client.Dispatch("Outlook.Application")
-        except:
+        except Exception:
             pass
 
-        batch = remaining[:batch_size]
-        remaining = remaining[batch_size:]
+        batch_capacity = min(batch_size, total_cap - total_sent)
+        batch = remaining[:batch_capacity]
+        remaining = remaining[batch_capacity:]
 
-        for recipient in batch:
-            current_addr = send_from[robin_idx % len(send_from)]
-            robin_idx += 1
+        while batch and total_sent < total_cap:
+            current_addr, robin_idx = _next_account_with_capacity(
+                send_from,
+                sent_by,
+                max_emails,
+                robin_idx,
+            )
+            if current_addr is None:
+                break
+
             account = accounts[current_addr]
+            available_for_account = max_emails - sent_by[current_addr]
+            group_size = 1
+            if send_mode == SEND_MODE_BCC:
+                group_size = min(bcc_batch_size, available_for_account, len(batch))
+
+            recipient_group = batch[:group_size]
+            batch = batch[group_size:]
+            representative = recipient_group[0]
 
             try:
                 mail = outlook.CreateItemFromTemplate(template_path)
 
-                # --- SAFELY UPDATE RECIPIENTS ---
-                # Remove ANY existing 'To' recipients saved in the template (Type 1 = olTo)
-                # But KEEP the CC (Type 2 = olCC) and BCC (Type 3 = olBCC)
-                for i in range(mail.Recipients.Count, 0, -1):
-                    try:
-                        if mail.Recipients.Item(i).Type == 1:
-                            mail.Recipients.Remove(i)
-                    except Exception:
-                        pass
+                if send_mode == SEND_MODE_BCC:
+                    _clear_recipient_types(mail, {1, 3})
+                    _add_recipient(mail, current_addr, 1)
+                    for recipient in recipient_group:
+                        _add_recipient(mail, recipient["email"], 3)
+                else:
+                    _clear_recipient_types(mail, {1})
+                    _add_recipient(mail, representative["email"], 1)
 
-                # Cleanly add the new recipient
-                target_email = recipient["email"].strip()
-                new_recip = mail.Recipients.Add(target_email)
-                new_recip.Type = 1 # Set as 'To'
-                new_recip.Resolve() # Force Outlook to accept the email address
-
-                # Optional: Force resolve everything else (like the CCs) to ensure no Outlook errors
                 mail.Recipients.ResolveAll()
+                _force_account(mail, account)
 
-                # --- FORCE ACCOUNT ---
-                try:
-                    mail._oleobj_.Invoke(*(64209, 0, 8, 0, account))
-                except Exception:
-                    try:
-                        mail.SendUsingAccount = account 
-                    except:
-                        pass
+                body, is_html = _get_body(mail)
+                body = _apply_body_replacements(
+                    body,
+                    representative,
+                    current_addr,
+                    sender_names=sender_names,
+                    filter_short_names=filter_short_names,
+                    send_mode=send_mode,
+                )
+                _set_body(mail, body, is_html)
 
-                # --- TEXT REPLACEMENTS ---
-                try:
-                    body = mail.HTMLBody
-                    is_html = True
-                except:
-                    body = mail.Body
-                    is_html = False
-
-                if body:
-                    preview_first = _first_name(recipient.get('full_name', ''))
-                    short_name = len(preview_first) <= 3
-                    
-                    def _ireplace(text, old, new):
-                        return re.compile(re.escape(old), re.IGNORECASE).sub(lambda m: new, text)
-
-                    if short_name:
-                        body = re.sub(r'(?i)Dear\s+\[First name\],', lambda m: 'Greetings,', body)
-                    else:
-                        body = _ireplace(body, "[First name]", preview_first)
-                        
-                    inst_name = recipient.get("institution_name", "")
-                    body = _ireplace(body, "[Institution Name]", inst_name)
-                    
-                    if sender_names and current_addr in sender_names:
-                        body = _ireplace(body, "[sender name]", sender_names[current_addr])
-                    body = _ireplace(body, "[sender mail]", current_addr)
-                    
-                    if is_html:
-                        mail.HTMLBody = body
-                    else:
-                        mail.Body = body
-
-                # --- SAVE AND SEND ---
                 mail.Save()
 
                 if dry_run:
@@ -212,28 +326,47 @@ def send_emails_from_template(
                 else:
                     mail.Send()
 
-                total_sent += 1
-                sent_by[current_addr] += 1
+                sent_count = len(recipient_group)
+                total_sent += sent_count
+                sent_by[current_addr] += sent_count
 
-                print(f"[{total_sent}] {recipient['email']} via {current_addr}")
+                if send_mode == SEND_MODE_BCC:
+                    print(
+                        f"[{total_sent}] BCC batch of {sent_count} recipient(s) "
+                        f"via {current_addr}"
+                    )
+                else:
+                    print(f"[{total_sent}] {representative['email']} via {current_addr}")
 
                 if csv_path and not dry_run:
-                    _update_csv_status(
-                        csv_path,
-                        recipient["email"],
-                        sent_from=current_addr,
-                        email_column=email_column,
-                        status_column=status_column,
-                    )
+                    for recipient in recipient_group:
+                        _update_csv_status(
+                            csv_path,
+                            recipient["email"],
+                            sent_from=current_addr,
+                            email_column=email_column,
+                            status_column=status_column,
+                        )
 
             except Exception as e:
-                print(f"❌ Error processing {recipient.get('email', 'unknown')}: {e}")
+                if send_mode == SEND_MODE_BCC:
+                    target = f"BCC batch starting with {representative.get('email', 'unknown')}"
+                else:
+                    target = representative.get("email", "unknown")
+                print(f"Error processing {target}: {e}")
 
-            _delay = random.uniform(delay_in_batch, delay_in_batch_max) if delay_in_batch_max and delay_in_batch_max > delay_in_batch else delay_in_batch
+            if total_sent >= total_cap:
+                break
+
+            _delay = delay_in_batch
+            if delay_in_batch_max and delay_in_batch_max > delay_in_batch:
+                _delay = random.uniform(delay_in_batch, delay_in_batch_max)
             time.sleep(_delay)
 
         if remaining and total_sent < total_cap:
-            _interval = random.uniform(batch_interval, batch_interval_max) if batch_interval_max and batch_interval_max > batch_interval else batch_interval
+            _interval = batch_interval
+            if batch_interval_max and batch_interval_max > batch_interval:
+                _interval = random.uniform(batch_interval, batch_interval_max)
             _countdown(_interval)
 
-    print(f"\nFinished — {total_sent} emails sent.")
+    print(f"\nFinished - {total_sent} recipient(s) sent.")
