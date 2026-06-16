@@ -9,7 +9,7 @@ TEMPLATE_PATH = r"C:\Enter_path\abc.oft"
 DATABASE_PATH = r"C:\Enter_path - Sheet1.csv"
 
 # Defaults (user can override interactively)
-DEFAULT_SEND_FROM = ["EnterMail@gmail.com"]
+DEFAULT_SEND_FROM = ["EnterMail@outlook.com"]
 DEFAULT_MAX_EMAILS = 450  # per account
 DEFAULT_BATCH_SIZE = 300
 DEFAULT_BATCH_INTERVAL = 1800  # seconds
